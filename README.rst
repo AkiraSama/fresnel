@@ -10,8 +10,8 @@ fresnel bot for Lighthouse 9
 
 Installation
 ============
-The following installation methods were tested and verified on
-a Debian 10 "buster" system.
+The following installation was tested and verified on a Debian 10
+"buster" system.
 
 Dependencies
 ------------
