@@ -74,12 +74,14 @@ class SelfRoles:
     @group(invoke_without_command=True)
     @has_permissions(manage_roles=True)
     async def roleman(self, ctx: Context):
-        """manage selfroles"""
+        """Manage selfroles."""
 
         await ctx.send(await self.bot.get_help_message(ctx))
 
     @roleman.command(name='add')
     async def roleman_add(self, ctx: Context, *roles: Role):
+        """Add roles to the selfrole registration."""
+
         if not roles:
             await ctx.send(await self.bot.get_help_message(ctx))
             return
@@ -107,6 +109,8 @@ class SelfRoles:
 
     @roleman.command(name='remove')
     async def roleman_remove(self, ctx: Context, *roles: Role):
+        """Remove roles from the selfrole registration."""
+
         if not roles:
             await ctx.send(await self.bot.get_help_message(ctx))
             return
@@ -132,6 +136,8 @@ class SelfRoles:
 
     @command()
     async def listroles(self, ctx: Context):
+        """List all available selfroles."""
+
         roles = sorted(
             (
                 ctx.guild.get_role(role_id)
@@ -152,6 +158,8 @@ class SelfRoles:
 
     @command()
     async def addrole(self, ctx: Context, *roles: Role):
+        """Add a role to yourself."""
+
         if not roles:
             await ctx.send(await self.bot.get_help_message(ctx))
             return
@@ -182,6 +190,8 @@ class SelfRoles:
 
     @command()
     async def removerole(self, ctx: Context, *roles: Role):
+        """Remove a role from yourself."""
+
         if not roles:
             await ctx.send(await self.bot.get_help_message(ctx))
             return
