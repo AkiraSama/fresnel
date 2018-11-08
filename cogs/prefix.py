@@ -74,7 +74,7 @@ class PrefixManager:
                     )
 
                     await cur.execute(str(
-                        self.Query.form_(table).where(where).delete()
+                        self.Query.form_(self.table).where(where).delete()
                     ))
 
         def get_prefix(bot: Bot, message: Message):
@@ -116,7 +116,7 @@ class PrefixManager:
             return
 
         new_prefixes.append(prefix)
-        
+
         row = StringIO()
         csv.writer(row).writerow(new_prefixes)
 
@@ -156,7 +156,7 @@ class PrefixManager:
         except ValueError:
             await ctx.send("No such prefix exists.")
             return
-        
+
         row = StringIO()
         csv.writer(row).writerow(new_prefixes)
 
