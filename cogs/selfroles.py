@@ -19,7 +19,7 @@ from fresnel.core.util import EmbedPaginator
 log = logging.getLogger(__name__)
 
 
-SELFROLE_SCHEMA = '''
+SCHEMA = '''
 CREATE TABLE IF NOT EXISTS "{name}" (
     role_id BIGINT NOT NULL,
     PRIMARY KEY (role_id)
@@ -45,7 +45,7 @@ class SelfRoles:
             async with self.pool.acquire() as conn:
                 async with conn.cursor() as cur:
                     await cur.execute(
-                        SELFROLE_SCHEMA.format(name=name)
+                        SCHEMA.format(name=name)
                     )
 
                     await cur.execute(str(

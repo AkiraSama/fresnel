@@ -64,8 +64,8 @@ class ExtensionManager:
     async def ext_reload(self, ctx: Context, ext_name: str):
         """Reload an extension by name."""
 
-        if await self.disable.callback(self, ctx, ext_name):
-            await self.enable.callback(self, ctx, ext_name)
+        if await self.ext_disable.callback(self, ctx, ext_name):
+            await self.ext_enable.callback(self, ctx, ext_name)
 
 
 def setup(bot: Bot):
