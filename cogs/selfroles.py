@@ -138,11 +138,16 @@ class SelfRoles:
     async def listroles(self, ctx: Context):
         """List all available selfroles."""
 
+        roles = self.cache.get(ctx.guild.id)
+        if not roles:
+            await ctx.send("No roles registered.")
+            return
+
         roles = sorted(
             (
                 ctx.guild.get_role(role_id)
                 for role_id
-                in self.cache[ctx.guild.id]
+                in roles
             ),
             key=attrgetter('position'),
             reverse=True,
