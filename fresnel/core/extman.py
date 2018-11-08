@@ -1,7 +1,7 @@
 import logging
 from pathlib import Path
 
-from discord.ext.commands import Bot, Context, command, group, is_owner
+from discord.ext.commands import Bot, Context, group, is_owner
 
 
 log = logging.getLogger(__name__)
@@ -29,7 +29,7 @@ class ExtensionManager:
     @is_owner()
     async def ext(self, ctx: Context, ext_name: str):
         """Manage extensions."""
-        
+
         await ctx.send(await self.bot.get_help_message(ctx))
 
     @ext.command(name='enable')
