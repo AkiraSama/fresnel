@@ -62,14 +62,7 @@ class SelfRoles:
                             cleanup.append(role_id)
 
                     if cleanup:
-                        where = reduce(
-                            or_,
-                            (table.role_id == role_id for role_id in cleanup),
-                        )
-
-                        await cur.execute(str(
-                            self.Query.from_(table).where(where).delete()
-                        ))
+                        await self._remove_roles(guild.id, *cleanup)
 
     @group(invoke_without_command=True)
     @has_permissions(manage_roles=True)
@@ -107,6 +100,22 @@ class SelfRoles:
 
         await pages.send_to()
 
+    async def _remove_roles(self, guild_id, *role_ids):
+        table = self.tables[guild_id]
+        where = reduce(
+            or_,
+            (table.role_id == role_id for role_id in role_ids),
+        )
+
+        async with self.pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(str(
+                    self.Query.from_(table).where(where).delete()
+                ))
+
+        for role_id in role_ids:
+            self.cache[guild_id].discard(role_id)
+
     @roleman.command(name='remove')
     async def roleman_remove(self, ctx: Context, *roles: Role):
         """Remove roles from the selfrole registration."""
@@ -115,17 +124,7 @@ class SelfRoles:
             await ctx.send(await self.bot.get_help_message(ctx))
             return
 
-        table = self.tables[ctx.guild.id]
-        where = reduce(or_, (table.role_id == role.id for role in roles))
-
-        async with self.pool.acquire() as conn:
-            async with conn.cursor() as cur:
-                await cur.execute(str(
-                    self.Query.from_(table).where(where).delete()
-                ))
-
-        for role in roles:
-            self.cache[ctx.guild.id].discard(role.id)
+        await self._remove_roles(ctx.guild.id, *(role.id for role in roles))
 
         pages = EmbedPaginator(ctx, "Unregistered the following roles...",
                                color=Color.green())
@@ -133,6 +132,10 @@ class SelfRoles:
             pages.add_line(role.mention)
 
         await pages.send_to()
+
+    async def on_guild_role_delete(self, role: Role):
+        if role.id in self.cache[role.guild.id]:
+            await self._remove_roles(role.guild.id, role.id)
 
     @command()
     async def listroles(self, ctx: Context):
