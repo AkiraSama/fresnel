@@ -1,11 +1,15 @@
 import logging
+import re
+import shlex
 from functools import reduce
 from operator import attrgetter, or_
 
 from discord import Color, Embed, Role
 from discord.ext.commands import (
+    BadArgument,
     Bot,
     Context,
+    NoPrivateMessage,
     command,
     group,
     has_permissions,
@@ -18,13 +22,15 @@ from fresnel.core.util import EmbedPaginator
 
 log = logging.getLogger(__name__)
 
-
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS "{name}" (
     role_id BIGINT NOT NULL,
     PRIMARY KEY (role_id)
 )
 '''
+
+ID_MATCH = re.compile(r'([0-9]{15,21})$')
+ROLE_ID_MATCH = re.compile(r'<@&([0-9]+)>$')
 
 
 class SelfRoles:
@@ -34,6 +40,7 @@ class SelfRoles:
         self.Query = bot._db_Query
         self.tables = {}
         self.cache = {}
+        self.name_cache = {}
 
     async def _init(self):
         for guild in self.bot.guilds:
@@ -41,6 +48,9 @@ class SelfRoles:
             self.tables[guild.id] = table = Table(name)
 
             self.cache[guild.id] = set()
+            self.name_cache[guild.id] = {
+                role.name.upper(): role.id for role in guild.roles
+            }
 
             async with self.pool.acquire() as conn:
                 async with conn.cursor() as cur:
@@ -64,6 +74,56 @@ class SelfRoles:
                     if cleanup:
                         await self._remove_roles(guild.id, *cleanup)
 
+    async def on_guild_join(self, guild):
+        name = f'selfroles-{guild.id}'
+        self.tables[guild.id] = Table(name)
+
+        self.cache[guild.id] = set()
+        self.name_cache[guild.id] = {
+            role.name.upper(): role.id for role in guild.roles
+        }
+
+        async with self.pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    SCHEMA.format(name=name)
+                )
+
+    def _convert_roles(self, ctx: Context, full_message: str):
+        guild = ctx.message.guild
+        if not guild:
+            raise NoPrivateMessage()
+
+        args = shlex.split(full_message)
+
+        results = []
+        try:
+            for arg in args:
+                match = ID_MATCH.match(arg) or ROLE_ID_MATCH.match(arg)
+                if match:
+                    result = guild.get_role(int(match.group(1)))
+                else:
+                    result = guild.get_role(
+                        self.name_cache[guild.id].get(arg.upper())
+                    )
+
+                if result is None:
+                    raise BadArgument(f'Role "{arg}" not found.')
+                results.append(result)
+        except BadArgument:
+            if not results:
+                result = guild.get_role(
+                    self.name_cache[guild.id].get(full_message.upper())
+                )
+
+                if result is None:
+                    raise
+                results.append(result)
+            else:
+                raise
+
+        return results
+
     @group(invoke_without_command=True)
     @has_permissions(manage_roles=True)
     async def roleman(self, ctx: Context):
@@ -72,12 +132,10 @@ class SelfRoles:
         await ctx.send(await self.bot.get_help_message(ctx))
 
     @roleman.command(name='add')
-    async def roleman_add(self, ctx: Context, *roles: Role):
+    async def roleman_add(self, ctx: Context, *, roles):
         """Add roles to the selfrole registration."""
 
-        if not roles:
-            await ctx.send(await self.bot.get_help_message(ctx))
-            return
+        roles = self._convert_roles(ctx, roles)
 
         async with self.pool.acquire() as conn:
             async with conn.cursor() as cur:
@@ -117,12 +175,10 @@ class SelfRoles:
             self.cache[guild_id].discard(role_id)
 
     @roleman.command(name='remove')
-    async def roleman_remove(self, ctx: Context, *roles: Role):
+    async def roleman_remove(self, ctx: Context, *, roles):
         """Remove roles from the selfrole registration."""
 
-        if not roles:
-            await ctx.send(await self.bot.get_help_message(ctx))
-            return
+        roles = self._convert_roles(ctx, roles)
 
         await self._remove_roles(ctx.guild.id, *(role.id for role in roles))
 
@@ -136,6 +192,11 @@ class SelfRoles:
     async def on_guild_role_delete(self, role: Role):
         if role.id in self.cache[role.guild.id]:
             await self._remove_roles(role.guild.id, role.id)
+
+    async def on_guild_role_update(self, before: Role, after: Role):
+        if before.name != after.name:
+            self.name_cache[before.guild.id][after.name.upper()] = before.id
+            del self.name_cache[before.guild.id][before.name.upper()]
 
     @command()
     async def listroles(self, ctx: Context):
@@ -165,12 +226,10 @@ class SelfRoles:
         await pages.send_to()
 
     @command()
-    async def addrole(self, ctx: Context, *roles: Role):
+    async def addrole(self, ctx: Context, *, roles):
         """Add a role to yourself."""
 
-        if not roles:
-            await ctx.send(await self.bot.get_help_message(ctx))
-            return
+        roles = self._convert_roles(ctx, roles)
 
         available = []
         unavailable = []
@@ -197,12 +256,10 @@ class SelfRoles:
             ))
 
     @command()
-    async def removerole(self, ctx: Context, *roles: Role):
+    async def removerole(self, ctx: Context, *, roles):
         """Remove a role from yourself."""
 
-        if not roles:
-            await ctx.send(await self.bot.get_help_message(ctx))
-            return
+        roles = self._convert_roles(ctx, roles)
 
         available = []
         unavailable = []
