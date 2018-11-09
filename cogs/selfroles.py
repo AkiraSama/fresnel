@@ -220,7 +220,7 @@ class SelfRoles:
         pages = EmbedPaginator(ctx, "Available selfroles...")
         for line, role in enumerate(roles, start=1):
             pages.add_line(role.mention)
-            if line % 10 == 0:
+            if line % 15 == 0:
                 pages.close_page()
 
         await pages.send_to()
@@ -284,6 +284,20 @@ class SelfRoles:
                 description=', '.join(role.mention for role in available),
                 color=Color.green(),
             ))
+
+    @command()
+    async def inrole(self, ctx: Context, *, role):
+        """Check what users have a role."""
+
+        role = self._convert_roles(ctx, role)[0]
+
+        pages = EmbedPaginator(ctx, f'Members with role "{role}"...')
+        for line, member in enumerate(role.members, start=1):
+            pages.add_line(member.mention)
+            if line % 15 == 0:
+                pages.close_page()
+
+        await pages.send_to()
 
 
 async def _setup(bot: Bot):
