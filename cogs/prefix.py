@@ -105,7 +105,7 @@ class PrefixManager:
         await ctx.send(f"Guild prefixes: `{'`, `'.join(prefixes)}`")
 
     @prefix.command(name='add')
-    @has_permissions(manage_messages=True)
+    @has_permissions(manage_channels=True)
     async def prefix_add(self, ctx: Context, prefix: str):
         """Add a new custom command prefix."""
 
@@ -141,7 +141,7 @@ class PrefixManager:
         await ctx.send("Added new prefix.")
 
     @prefix.command(name='remove')
-    @has_permissions(manage_messages=True)
+    @has_permissions(manage_channels=True)
     async def prefix_remove(self, ctx: Context, prefix: str):
         """Remove and existing custom command prefix."""
 
