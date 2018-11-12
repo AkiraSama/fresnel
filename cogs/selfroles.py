@@ -198,7 +198,7 @@ class SelfRoles:
             self.name_cache[before.guild.id][after.name.upper()] = before.id
             del self.name_cache[before.guild.id][before.name.upper()]
 
-    @command()
+    @command(aliases=('roles',))
     async def listroles(self, ctx: Context):
         """List all available selfroles."""
 
