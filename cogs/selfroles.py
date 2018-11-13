@@ -290,9 +290,14 @@ class SelfRoles:
         """Check what users have a role."""
 
         role = self._convert_roles(ctx, role)[0]
+        members = role.members
+
+        if not members:
+            await ctx.send(f'No members with role "{role}".')
+            return
 
         pages = EmbedPaginator(ctx, f'Members with role "{role}"...')
-        for line, member in enumerate(role.members, start=1):
+        for line, member in enumerate(members, start=1):
             pages.add_line(member.mention)
             if line % 15 == 0:
                 pages.close_page()
