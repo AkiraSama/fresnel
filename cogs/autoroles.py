@@ -129,6 +129,9 @@ class AutoRoles:
 
         for guild_id, users in time_cache.items():
             for user_id, delta in users.items():
+                if delta is None:
+                    inc = 1
+                    continue
                 inc = 1 + delta.get('len', 0) + delta.get('var', 0)
                 self.cache[guild_id][
                     'thz'
@@ -164,6 +167,9 @@ class AutoRoles:
 
         delta = self.time_cache[message.guild.id].get(message.author.id, {})
 
+        if delta is None:
+            return
+
         length = len(message.content)
         if length >= 50:
             delta['len'] = min(delta.get('len', 0) + 1, 2)
@@ -171,12 +177,15 @@ class AutoRoles:
         var = set(message.content)
         if len(CHARS & var):
             delta['var'] = min(delta.get('var', 0) + 1, 3)
-        
+
         latest = delta.get('latest', (length, var, 0))
         if latest[0] == length and latest[1] == var:
             delta['latest'] = (length, var, latest[2] + 1)
 
-        self.time_cache[message.guild.id][message.author.id] = delta
+        if latest[2] >= 5:
+            self.time_cache[message.guild.id][message.author.id] = None
+        else:
+            self.time_cache[message.guild.id][message.author.id] = delta
 
     async def _remove_users(self, guild_id, *user_ids):
         table = self.tables[guild_id]['thz']
@@ -213,7 +222,7 @@ class AutoRoles:
     async def on_guild_join(self, guild):
         auto_name = f'autoroles-{guild.id}'
         thz_name = f'thz-{guild.id}'
-        
+
         self.tables[guild.id]['auto'] = Table(auto_name)
         self.tables[guild.id]['thz'] = Table(thz_name)
 
