@@ -95,6 +95,7 @@ def main(cfg):
     try:
         bot.load_extension('fresnel.core.error')
         bot.load_extension('fresnel.core.db')
+        bot.load_extension('fresnel.core.cache')
         bot.load_extension('fresnel.core.extman')
 
         bot.run(token)

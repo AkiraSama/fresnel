@@ -40,7 +40,7 @@ class SelfRoles:
         self.Query = bot._db_Query
         self.tables = {}
         self.cache = {}
-        self.name_cache = {}
+        self.name_cache = bot.role_name_cache
 
     async def _init(self):
         for guild in self.bot.guilds:
@@ -48,9 +48,6 @@ class SelfRoles:
             self.tables[guild.id] = table = Table(name)
 
             self.cache[guild.id] = set()
-            self.name_cache[guild.id] = {
-                role.name.upper(): role.id for role in guild.roles
-            }
 
             async with self.pool.acquire() as conn:
                 async with conn.cursor() as cur:
@@ -74,14 +71,13 @@ class SelfRoles:
                     if cleanup:
                         await self._remove_roles(guild.id, *cleanup)
 
+        await self.bot.fresnel_cache_flag.wait()
+
     async def on_guild_join(self, guild):
         name = f'selfroles-{guild.id}'
         self.tables[guild.id] = Table(name)
 
         self.cache[guild.id] = set()
-        self.name_cache[guild.id] = {
-            role.name.upper(): role.id for role in guild.roles
-        }
 
         async with self.pool.acquire() as conn:
             async with conn.cursor() as cur:
@@ -193,11 +189,6 @@ class SelfRoles:
         if role.id in self.cache[role.guild.id]:
             await self._remove_roles(role.guild.id, role.id)
 
-    async def on_guild_role_update(self, before: Role, after: Role):
-        if before.name != after.name:
-            self.name_cache[before.guild.id][after.name.upper()] = before.id
-            del self.name_cache[before.guild.id][before.name.upper()]
-
     @command(aliases=('roles',))
     async def listroles(self, ctx: Context):
         """List all available selfroles."""
@@ -255,7 +246,7 @@ class SelfRoles:
                 color=Color.green(),
             ))
 
-    @command()
+    @command(aliases=('delrole',))
     async def removerole(self, ctx: Context, *, roles):
         """Remove a role from yourself."""
 
