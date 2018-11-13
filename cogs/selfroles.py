@@ -1,15 +1,11 @@
 import logging
-import re
-import shlex
 from functools import reduce
 from operator import attrgetter, or_
 
 from discord import Color, Embed, Role
 from discord.ext.commands import (
-    BadArgument,
     Bot,
     Context,
-    NoPrivateMessage,
     command,
     group,
     has_permissions,
@@ -29,9 +25,6 @@ CREATE TABLE IF NOT EXISTS "{name}" (
 )
 '''
 
-ID_MATCH = re.compile(r'([0-9]{15,21})$')
-ROLE_ID_MATCH = re.compile(r'<@&([0-9]+)>$')
-
 
 class SelfRoles:
     def __init__(self, bot: Bot):
@@ -40,7 +33,6 @@ class SelfRoles:
         self.Query = bot._db_Query
         self.tables = {}
         self.cache = {}
-        self.name_cache = bot.role_name_cache
 
     async def _init(self):
         for guild in self.bot.guilds:
@@ -85,41 +77,6 @@ class SelfRoles:
                     SCHEMA.format(name=name)
                 )
 
-    def _convert_roles(self, ctx: Context, full_message: str):
-        guild = ctx.message.guild
-        if not guild:
-            raise NoPrivateMessage()
-
-        args = shlex.split(full_message)
-
-        results = []
-        try:
-            for arg in args:
-                match = ID_MATCH.match(arg) or ROLE_ID_MATCH.match(arg)
-                if match:
-                    result = guild.get_role(int(match.group(1)))
-                else:
-                    result = guild.get_role(
-                        self.name_cache[guild.id].get(arg.upper())
-                    )
-
-                if result is None:
-                    raise BadArgument(f'Role "{arg}" not found.')
-                results.append(result)
-        except BadArgument:
-            if not results:
-                result = guild.get_role(
-                    self.name_cache[guild.id].get(full_message.upper())
-                )
-
-                if result is None:
-                    raise
-                results.append(result)
-            else:
-                raise
-
-        return results
-
     @group(invoke_without_command=True)
     @has_permissions(manage_roles=True)
     async def roleman(self, ctx: Context):
@@ -131,7 +88,7 @@ class SelfRoles:
     async def roleman_add(self, ctx: Context, *, roles):
         """Add roles to the selfrole registration."""
 
-        roles = self._convert_roles(ctx, roles)
+        roles = self.bot.convert_roles(ctx, roles)
 
         async with self.pool.acquire() as conn:
             async with conn.cursor() as cur:
@@ -174,7 +131,7 @@ class SelfRoles:
     async def roleman_remove(self, ctx: Context, *, roles):
         """Remove roles from the selfrole registration."""
 
-        roles = self._convert_roles(ctx, roles)
+        roles = self.bot.convert_roles(ctx, roles)
 
         await self._remove_roles(ctx.guild.id, *(role.id for role in roles))
 
@@ -220,7 +177,7 @@ class SelfRoles:
     async def addrole(self, ctx: Context, *, roles):
         """Add a role to yourself."""
 
-        roles = self._convert_roles(ctx, roles)
+        roles = self.bot.convert_roles(ctx, roles)
 
         available = []
         unavailable = []
@@ -250,7 +207,7 @@ class SelfRoles:
     async def removerole(self, ctx: Context, *, roles):
         """Remove a role from yourself."""
 
-        roles = self._convert_roles(ctx, roles)
+        roles = self.bot.convert_roles(ctx, roles)
 
         available = []
         unavailable = []
@@ -280,7 +237,7 @@ class SelfRoles:
     async def inrole(self, ctx: Context, *, role):
         """Check what users have a role."""
 
-        role = self._convert_roles(ctx, role)[0]
+        role = self.bot.convert_roles(ctx, role)[0]
         members = role.members
 
         if not members:
