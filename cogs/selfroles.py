@@ -173,7 +173,7 @@ class SelfRoles:
 
         await pages.send_to()
 
-    @command()
+    @command(aliases=('+',))
     async def addrole(self, ctx: Context, *, roles):
         """Add a role to yourself."""
 
@@ -203,7 +203,7 @@ class SelfRoles:
                 color=Color.green(),
             ))
 
-    @command(aliases=('delrole',))
+    @command(aliases=('delrole', '-'))
     async def removerole(self, ctx: Context, *, roles):
         """Remove a role from yourself."""
 
