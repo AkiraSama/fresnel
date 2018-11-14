@@ -1,13 +1,24 @@
 import asyncio
 import logging
 import string
+from bisect import bisect_left
 from functools import reduce
-from operator import or_
+from operator import itemgetter, or_
 
-from discord import Member, Message, Role
-from discord.ext.commands import Bot, Context, group
+from discord import Embed, Member, Message, Role
+from discord.ext.commands import (
+    Bot,
+    BucketType,
+    Context,
+    command,
+    cooldown,
+    group,
+    has_permissions,
+)
 from psycopg2 import IntegrityError
 from pypika import Table
+
+from fresnel.core.util import EmbedPaginator
 
 
 log = logging.getLogger(__name__)
@@ -54,6 +65,8 @@ class AutoRoles:
 
             self.cache[guild.id] = {}
             self.cache[guild.id]['auto'] = {}
+            self.cache[guild.id]['auto']['reverse'] = {}
+            self.cache[guild.id]['auto']['values'] = []
             self.cache[guild.id]['thz'] = {}
 
             self.time_cache[guild.id] = {}
@@ -99,8 +112,14 @@ class AutoRoles:
 
                         if role:
                             self.cache[guild.id]['auto'][role.id] = thz
+                            self.cache[guild.id]['auto'][
+                                'reverse'
+                            ][thz] = role.id
+                            self.cache[guild.id]['auto']['values'].append(thz)
                         else:
                             cleanup.append(role_id)
+
+                    self.cache[guild.id]['auto']['values'].sort()
 
                     if cleanup:
                         await self._remove_roles(guild.id, *cleanup)
@@ -118,7 +137,7 @@ class AutoRoles:
         while True:
             await asyncio.sleep(self.THZ_INTERVAL)
             try:
-                log.info("allocating THz")
+                log.debug("allocating THz")
                 await self._periodic()
             except Exception as e:
                 log.error(e)
@@ -217,7 +236,9 @@ class AutoRoles:
                 ))
 
         for role_id in role_ids:
-            self.cache[guild_id]['auto'].pop(role_id, None)
+            thz = self.cache[guild_id]['auto'].pop(role_id, None)
+            self.cache[guild_id]['auto']['reverse'].pop(thz)
+            self.cache[guild_id]['auto']['values'].remove(thz)
 
     async def on_guild_join(self, guild):
         auto_name = f'autoroles-{guild.id}'
@@ -227,6 +248,8 @@ class AutoRoles:
         self.tables[guild.id]['thz'] = Table(thz_name)
 
         self.cache[guild.id]['auto'] = {}
+        self.cache[guild.id]['auto']['reverse'] = {}
+        self.cache[guild.id]['auto']['values'] = []
         self.cache[guild.id]['thz'] = {}
 
     async def on_guild_role_delete(self, role: Role):
@@ -236,6 +259,133 @@ class AutoRoles:
     async def on_member_remove(self, member: Member):
         if member.id in self.cache[member.guild.id]['thz']:
             await self._remove_users(member.guild.id, member.id)
+
+    def _get_nearest_role(self, guild_id, thz: int):
+        values = self.cache[guild_id]['auto']['values']
+        index = bisect_left(values, thz)
+        if values[index] > thz:
+            raise IndexError("no applicable roles")
+        return self.cache[guild_id]['auto']['reverse'][values[index]]
+
+    @command(aliases=('level', 'xp'))
+    @cooldown(1, 5.0, BucketType.user) 
+    async def thz(self, ctx: Context, member: Member = None):
+        """Display your THz for this server."""
+
+        if not member:
+            member = ctx.author
+
+        try:
+            thz = self.cache[ctx.guild.id]['thz'][member.id]
+        except KeyError:
+            await ctx.send("Untracked user!")
+            return
+
+        try:
+            role = ctx.guild.get_role(
+                self._get_nearest_role(ctx.guild.id, thz)
+            )
+        except IndexError:
+            role = None
+
+        ranks = sorted(
+            (
+                (thz, user_id)
+                for user_id, thz
+                in self.cache[ctx.guild.id]['thz'].items()
+            ),
+            reverse=True,
+        )
+
+        for index, (thz, user_id) in enumerate(ranks, start=1):
+            if user_id == member.id:
+                rank = index
+                break
+
+        embed=Embed(
+            title=f"{member.name}'s THz for {ctx.guild.name}",
+            description=(
+                f"**Total**: {thz} THz\n"
+                f"**Role**: {role.mention if role else 'N/A'}\n"
+                f"**Rank**: #{rank}/{len(self.cache[ctx.guild.id]['thz'])}\n"
+            ),
+        ).set_thumbnail(
+            url=member.avatar_url
+        )
+
+        await ctx.send(embed=embed)
+
+    @group(invoke_without_command=True, aliases=('autoroles',))
+    @has_permissions(manage_roles=True)
+    async def autorole(self, ctx: Context):
+        """Manage autoroles."""
+
+        await ctx.send(await self.bot.get_help_message(ctx))
+
+    @autorole.command(name='add')
+    async def autorole_add(self, ctx: Context, thz: int, *, role):
+        """Add a role to the autorole registration."""
+
+        role = self.bot.convert_roles(ctx, role)[0]
+        if thz in self.cache[ctx.guild.id]['auto']['reverse']:
+            await ctx.send('There is already a role registered for this THz '
+                           'value.')
+
+        async with self.pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                table = self.tables[ctx.guild.id]['auto']
+                try:
+                    await cur.execute(str(
+                        self.Query.into(table).insert(role.id, thz)
+                    ))
+                except IntegrityError:
+                    await cur.execute(str(
+                        self.Query.update(table).set(
+                            table.thz, thz,
+                        ).where(
+                            table.role_id == role.id
+                        )
+                    ))
+
+        self.cache[ctx.guild.id]['auto'][role.id] = thz
+        self.cache[ctx.guild.id]['auto']['reverse'][thz] = role.id
+        self.cache[ctx.guild.id]['auto']['values'].append(thz)
+        self.cache[ctx.guild.id]['auto']['values'].sort()
+        await ctx.send(f'Registered role "{role}" for {thz:,} THz.')
+
+    @autorole.command(name='remove')
+    async def autorole_remove(self, ctx: Context, *, role):
+        """Remove a role from the autorole registration."""
+
+        role = self.bot.convert_roles(ctx, role)[0]
+
+        await self._remove_roles(ctx.guild.id, role.id)
+
+        await ctx.send(f'Unregistered role "{role}".')
+
+    @autorole.command(name='list')
+    async def autorole_list(self, ctx: Context):
+        """List all available autoroles."""
+
+        roles = self.cache[ctx.guild.id]['auto']
+        if not roles:
+            await ctx.send("No autoroles registered.")
+            return
+
+        roles = sorted(
+            (
+                (ctx.guild.get_role(role_id), thz)
+                for role_id, thz
+                in roles.items()
+            ),
+            key=itemgetter(1),
+        )
+
+        pages = EmbedPaginator(ctx, f"{ctx.guild.name} autoroles...")
+        for index, (role, thz) in enumerate(roles, start=1):
+            pages.add_line(f'{index}. {role.mention} - {thz} THz')
+
+        await pages.send_to()
 
 
 async def _setup(bot: Bot):
