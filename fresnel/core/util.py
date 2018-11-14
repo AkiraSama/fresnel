@@ -59,8 +59,12 @@ class EmbedPaginator:
         pages = self.paginator.pages
         page = 1
 
+        title = self.title
+        if len(pages) > 1:
+            title = title + f' ({page}/{len(pages)})'
+
         msg = await dest.send(embed=Embed(
-            title=f'{self.title} ({page}/{len(pages)})',
+            title=title,
             description=pages[page - 1],
             **self.attrs,
         ))
