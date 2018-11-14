@@ -81,6 +81,9 @@ class CacheManager:
             ] = before.id
             del self.role_name_cache[before.guild.id][before.name.upper()]
 
+    async def on_guild_role_create(self, role: Role):
+        self.role_name_cache[role.guild.id][role.name.upper()] = role.id
+
 
 async def _setup(bot: Bot):
     await bot.wait_until_ready()
