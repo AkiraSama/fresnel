@@ -267,6 +267,44 @@ class AutoRoles:
             raise IndexError("no applicable roles")
         return self.cache[guild_id]['auto']['reverse'][values[index]]
 
+    async def _isolate_highest_role(self, member):
+        autoroles = []
+        for role in member.roles:
+            if role.id in self.cache[member.guild.id]['auto']:
+                autoroles.append(role)
+        autoroles.sort(
+            key=lambda role: self.cache[member.guild.id]['auto'][role.id],
+            reverse=True,
+        )
+        if autoroles:
+            await member.remove_roles(*autoroles[1:])
+            return autoroles[0]
+        return None
+
+    @command(aliases=('lb',))
+    @cooldown(1, 10.0, BucketType.channel)
+    async def leaderboard(self, ctx: Context):
+        """Display THz counts for this server."""
+
+        ranks = sorted(
+            (
+                (thz, user_id)
+                for user_id, thz
+                in self.cache[ctx.guild.id]['thz'].items()
+            ),
+            reverse=True,
+        )
+
+        pages = EmbedPaginator(ctx, f"THz counts for {ctx.guild.name}...")
+        for index, (thz, user_id) in enumerate(ranks, start=1):
+            member = ctx.guild.get_member(user_id)
+            if member:
+                pages.add_line(f"{index}. {member.mention} - {thz} THz")
+            else:
+                pages.add_line(f"{index}. User {user_id} - {thz} THz")
+
+        await pages.send_to()
+
     @command(aliases=('level', 'xp'))
     @cooldown(1, 5.0, BucketType.user) 
     async def thz(self, ctx: Context, member: Member = None):
@@ -353,6 +391,47 @@ class AutoRoles:
         self.cache[ctx.guild.id]['auto']['values'].sort()
         await ctx.send(f'Registered role "{role}" for {thz:,} THz.')
 
+        async with self.pool.acquire() as conn:
+            guild_id = ctx.guild.id
+            table = self.tables[guild_id]['thz']
+            for member in ctx.guild.members:
+                highest = await self._isolate_highest_role(member)
+                try:
+                    member_thz = self.cache[guild_id]['thz'][member.id]
+                except KeyError:
+                    continue
+                if self._get_nearest_role(
+                        guild_id,
+                        self.cache[guild_id]['thz'][member.id]
+                ) >= thz:
+                    await member.remove_roles(highest)
+                    await member.add_roles(role)
+                    continue
+
+                if (highest == role) and (
+                    self.cache[guild_id]['thz'][member.id] < thz
+                ):
+                    self.cache[guild_id]['thz'][member.id] = thz
+                    async with conn.cursor() as cur:
+                        try:
+                            await cur.execute(str(
+                                self.Query.into(
+                                    table
+                                ).insert(
+                                    user_id,
+                                    self.cache[guild_id]['thz'][member.id],
+                                )
+                            ))
+                        except IntegrityError:
+                            await cur.execute(str(
+                                self.Query.update(table).set(
+                                    table.thz,
+                                    self.cache[guild_id]['thz'][member.id],
+                                ).where(
+                                    table.user_id == member.id
+                                )
+                            ))
+
     @autorole.command(name='remove')
     async def autorole_remove(self, ctx: Context, *, role):
         """Remove a role from the autorole registration."""
@@ -377,6 +456,7 @@ class AutoRoles:
                 (ctx.guild.get_role(role_id), thz)
                 for role_id, thz
                 in roles.items()
+                if isinstance(role_id, int)
             ),
             key=itemgetter(1),
         )
