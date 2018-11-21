@@ -79,7 +79,10 @@ class CacheManager:
             ][
                 after.name.upper()
             ] = before.id
-            del self.role_name_cache[before.guild.id][before.name.upper()]
+            try:
+                del self.role_name_cache[before.guild.id][before.name.upper()]
+            except KeyError:
+                pass
 
     async def on_guild_role_create(self, role: Role):
         self.role_name_cache[role.guild.id][role.name.upper()] = role.id
