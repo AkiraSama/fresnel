@@ -417,6 +417,18 @@ class AutoRoles:
         if role.id in self.role_cache[role.guild.id]:
             await self._remove_roles(role.guild.id, role.id)
 
+            async with self.pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    for member in role.guild.members:
+                        if member.bot:
+                            continue
+
+                        await self._update_user_role(
+                            cur,
+                            role.guild,
+                            member,
+                        )
+
     async def on_member_remove(self, member: Member):
         await self._remove_users(member.guild.id, member.id)
 
