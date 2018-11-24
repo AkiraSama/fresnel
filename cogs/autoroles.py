@@ -1,11 +1,11 @@
 import asyncio
 import logging
 import string
-from bisect import bisect_left
+from bisect import bisect_right, insort_right
 from functools import reduce
-from operator import itemgetter, or_
+from operator import or_
 
-from discord import Embed, Member, Message, Role
+from discord import Embed, Guild, Member, Message, Role
 from discord.ext.commands import (
     Bot,
     BucketType,
@@ -23,23 +23,91 @@ from fresnel.core.util import EmbedPaginator
 
 log = logging.getLogger(__name__)
 
-AUTO_SCHEMA = '''
+ROLE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS "{name}" (
     role_id BIGINT NOT NULL,
     thz BIGINT NOT NULL,
     PRIMARY KEY (role_id)
 )
-'''
+"""
 
-THZ_SCHEMA = '''
+THZ_SCHEMA = """
 CREATE TABLE IF NOT EXISTS "{name}" (
     user_id BIGINT NOT NULL,
     thz BIGINT NOT NULL DEFAULT 0,
     PRIMARY KEY (user_id)
 )
-'''
+"""
 
 CHARS = frozenset(string.ascii_letters + string.punctuation)
+
+backup_flag = asyncio.Event()
+backup_flag.set()
+
+
+class AutoRoleCache:
+    def __init__(self):
+        self.role_cache = {}
+        self.reverse_role_cache = {}
+        self.values = []
+
+    def __bool__(self):
+        return bool(self.role_cache)
+
+    def __contains__(self, role_id: int):
+        return role_id in self.role_cache
+
+    def items(self):
+        return self.role_cache.items()
+
+    def has_thz(self, thz: int):
+        return thz in self.reverse_role_cache
+
+    def nearest_thz(self, thz: int):
+        index = bisect_right(self.values, thz) - 1
+        return self.values[index] if index >= 0 else None
+
+    def get_role_id(self, thz: int):
+        return self.reverse_role_cache[thz]
+
+    def get_nearest_role_id(self, thz: int):
+        thz = self.nearest_thz(thz)
+        if thz is not None:
+            return self.reverse_role_cache[thz]
+        return None
+
+    def find_role_ids(self, role_set: set):
+        return self.role_cache.keys() & role_set
+
+    def find_highest_role_id(self, role_set: set):
+        intersect = self.find_role_ids(role_set)
+        if intersect:
+            for thz in reversed(self.values):
+                if self.reverse_role_cache[thz] in intersect:
+                    return self.reverse_role_cache[thz]
+        return None
+
+    def add_role(self, role_id: int, thz: int):
+        if thz in self.reverse_role_cache:
+            raise ValueError("there is already a role id for this THz value")
+
+        try:
+            self.remove_role(role_id)
+        except ValueError:
+            pass
+
+        self.role_cache[role_id] = thz
+        self.reverse_role_cache[thz] = role_id
+        insort_right(self.values, thz)
+
+    def remove_role(self, role_id: int):
+        if role_id in self.role_cache:
+            old_thz = self.role_cache[role_id]
+            del self.role_cache[role_id]
+            del self.reverse_role_cache[old_thz]
+            self.values.remove(old_thz)
+        else:
+            raise ValueError("no such role id")
 
 
 class AutoRoles:
@@ -50,28 +118,51 @@ class AutoRoles:
         self.pool = bot._db_pool
         self.Query = bot._db_Query
         self.tables = {}
-        self.cache = {}
+        self.role_cache = {}
+        self.thz_cache = {}
+        self.user_cache = {}
         self.time_cache = {}
         self.ptask = None
 
     async def _init(self):
         for guild in self.bot.guilds:
-            auto_name = f'autoroles-{guild.id}'
+            role_name = f'autoroles-{guild.id}'
             thz_name = f'thz-{guild.id}'
 
             self.tables[guild.id] = {}
-            self.tables[guild.id]['auto'] = auto_table = Table(auto_name)
+            self.tables[guild.id]['role'] = role_table = Table(role_name)
             self.tables[guild.id]['thz'] = thz_table = Table(thz_name)
 
-            self.cache[guild.id] = {}
-            self.cache[guild.id]['auto'] = {}
-            self.cache[guild.id]['auto']['reverse'] = {}
-            self.cache[guild.id]['auto']['values'] = []
-            self.cache[guild.id]['thz'] = {}
+            self.role_cache[guild.id] = AutoRoleCache()
+            self.thz_cache[guild.id] = {}
+            self.user_cache[guild.id] = {}
 
             self.time_cache[guild.id] = {}
 
             async with self.pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute(
+                        ROLE_SCHEMA.format(name=role_name)
+                    )
+
+                    await cur.execute(str(
+                        self.Query.from_(role_table).select(
+                            role_table.role_id, role_table.thz,
+                        )
+                    ))
+
+                    cleanup = []
+                    async for role_id, thz in cur:
+                        role = guild.get_role(role_id)
+
+                        if role:
+                            self.role_cache[guild.id].add_role(role.id, thz)
+                        else:
+                            cleanup.append(role_id)
+
+                    if cleanup:
+                        await self._remove_roles(guild.id, *cleanup)
+
                 async with conn.cursor() as cur:
                     await cur.execute(
                         THZ_SCHEMA.format(name=thz_name)
@@ -84,45 +175,28 @@ class AutoRoles:
                     ))
 
                     cleanup = []
+                    member_ids = set((
+                        member.id
+                        for member
+                        in guild.members
+                        if not member.bot
+                    ))
                     async for user_id, thz in cur:
+                        member_ids.discard(user_id)
+
                         user = guild.get_member(user_id)
 
                         if user:
-                            self.cache[guild.id]['thz'][user.id] = thz
+                            self.thz_cache[guild.id][user.id] = thz
+                            await self._update_user_role(cur, guild, user)
                         else:
                             cleanup.append(user_id)
 
                     if cleanup:
                         await self._remove_users(guild.id, *cleanup)
 
-                async with conn.cursor() as cur:
-                    await cur.execute(
-                        AUTO_SCHEMA.format(name=auto_name)
-                    )
-
-                    await cur.execute(str(
-                        self.Query.from_(auto_table).select(
-                            auto_table.role_id, auto_table.thz,
-                        )
-                    ))
-
-                    cleanup = []
-                    async for role_id, thz in cur:
-                        role = guild.get_role(role_id)
-
-                        if role:
-                            self.cache[guild.id]['auto'][role.id] = thz
-                            self.cache[guild.id]['auto'][
-                                'reverse'
-                            ][thz] = role.id
-                            self.cache[guild.id]['auto']['values'].append(thz)
-                        else:
-                            cleanup.append(role_id)
-
-                    self.cache[guild.id]['auto']['values'].sort()
-
-                    if cleanup:
-                        await self._remove_roles(guild.id, *cleanup)
+                    for member_id in member_ids:
+                        await self.on_member_join(guild.get_member(member_id))
 
         await self.bot.fresnel_cache_flag.wait()
 
@@ -131,16 +205,21 @@ class AutoRoles:
         )
 
     def __unload(self):
-        self.ptask.cancel()
+        if self.ptask:
+            self.ptask.cancel()
 
     async def periodic(self):
         while True:
+            if not backup_flag.is_set():
+                break
             await asyncio.sleep(self.THZ_INTERVAL)
             try:
                 log.debug("allocating THz")
                 await self._periodic()
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
-                log.error(e)
+                log.error(f"periodic error: {e}")
 
     async def _periodic(self):
         time_cache = self.time_cache
@@ -151,60 +230,69 @@ class AutoRoles:
                 if delta is None:
                     inc = 1
                     continue
+
                 inc = 1 + delta.get('len', 0) + delta.get('var', 0)
-                self.cache[guild_id][
-                    'thz'
-                ][user_id] = inc + self.cache[guild_id]['thz'].get(user_id, 0)
+                self.thz_cache[guild_id][user_id] = (
+                    inc + self.thz_cache[guild_id].get(user_id, 0)
+                )
 
         async with self.pool.acquire() as conn:
             for guild_id, users in time_cache.items():
-                table = self.tables[guild_id]['thz']
+                guild = self.bot.get_guild(guild_id)
                 async with conn.cursor() as cur:
                     for user_id, delta in users.items():
-                        try:
-                            await cur.execute(str(
-                                self.Query.into(
-                                    table
-                                ).insert(
-                                    user_id,
-                                    self.cache[guild_id]['thz'][user_id]
-                                )
-                            ))
-                        except IntegrityError:
-                            await cur.execute(str(
-                                self.Query.update(table).set(
-                                    table.thz,
-                                    self.cache[guild_id]['thz'][user_id],
-                                ).where(
-                                    table.user_id == user_id
-                                )
-                            ))
+                        await self._update_user_thz(
+                            cur, guild_id, user_id
+                        )
+                        await self._update_user_role(
+                            cur, guild, guild.get_member(user_id)
+                        )
 
-    async def on_message(self, message: Message):
-        if message.author.bot:
+    async def _update_user_thz(self, cursor, guild_id, user_id):
+        table = self.tables[guild_id]['thz']
+        try:
+            await cursor.execute(str(
+                self.Query.into(
+                    table
+                ).insert(
+                    user_id,
+                    self.thz_cache[guild_id][user_id],
+                )
+            ))
+        except IntegrityError:
+            await cursor.execute(str(
+                self.Query.update(table).set(
+                    table.thz,
+                    self.thz_cache[guild_id][user_id],
+                ).where(
+                    table.user_id == user_id
+                )
+            ))
+
+    async def _update_user_role(self, cursor, guild, member):
+        role_id = self.role_cache[guild.id].get_nearest_role_id(
+            self.thz_cache[guild.id].get(member.id, 0)
+        )
+
+        if self.user_cache[guild.id].get(member.id) == role_id:
             return
 
-        delta = self.time_cache[message.guild.id].get(message.author.id, {})
+        role_ids = self.role_cache[guild.id].find_role_ids(
+            frozenset((role.id for role in member.roles))
+        )
+        role_ids.discard(role_id)
 
-        if delta is None:
-            return
+        if role_id:
+            await member.add_roles(
+                guild.get_role(role_id),
+                reason="Fresnel autoroles",
+            )
+        await member.remove_roles(
+            *(guild.get_role(rid) for rid in role_ids),
+            reason="Fresnel autoroles",
+        )
 
-        length = len(message.content)
-        if length >= 50:
-            delta['len'] = min(delta.get('len', 0) + 1, 2)
-
-        var = set(message.content)
-        if len(CHARS & var):
-            delta['var'] = min(delta.get('var', 0) + 1, 3)
-
-        latest = delta.get('latest', (length, var, 0))
-        if latest[0] == length and latest[1] == var:
-            delta['latest'] = (length, var, latest[2] + 1)
-
-        if latest[2] >= 5:
-            self.time_cache[message.guild.id][message.author.id] = None
-        else:
-            self.time_cache[message.guild.id][message.author.id] = delta
+        self.user_cache[guild.id][member.id] = role_id
 
     async def _remove_users(self, guild_id, *user_ids):
         table = self.tables[guild_id]['thz']
@@ -220,10 +308,12 @@ class AutoRoles:
                 ))
 
         for user_id in user_ids:
-            self.cache[guild_id]['thz'].pop(user_id, None)
+            self.time_cache[guild_id].pop(user_id, None)
+            self.thz_cache[guild_id].pop(user_id, None)
+            self.user_cache[guild_id].pop(user_id, None)
 
     async def _remove_roles(self, guild_id, *role_ids):
-        table = self.tables[guild_id]['auto']
+        table = self.tables[guild_id]['role']
         where = reduce(
             or_,
             (table.role_id == role_id for role_id in role_ids),
@@ -236,64 +326,116 @@ class AutoRoles:
                 ))
 
         for role_id in role_ids:
-            thz = self.cache[guild_id]['auto'].pop(role_id, None)
-            self.cache[guild_id]['auto']['reverse'].pop(thz)
-            self.cache[guild_id]['auto']['values'].remove(thz)
+            try:
+                self.role_cache[guild_id].remove_role(role_id)
+            except ValueError:
+                pass
 
-    async def on_guild_join(self, guild):
-        auto_name = f'autoroles-{guild.id}'
+    def _get_user_ranks(self, guild_id: int):
+        return sorted(
+            (
+                (thz, user_id)
+                for user_id, thz
+                in self.thz_cache[guild_id].items()
+            ),
+            reverse=True,
+        )
+
+    async def on_message(self, message: Message):
+        if message.author.bot:
+            return
+
+        delta = self.time_cache[message.guild.id].get(message.author.id, {})
+
+        if delta is None:
+            return
+
+        length = len(message.content)
+        if length >= 50:
+            delta['len'] = min(delta.get('len', 0) + 1, 2)
+
+        var = set(message.content)
+        if len(CHARS & var) >= 13:
+            delta['var'] = min(delta.get('var', 0) + 1, 3)
+
+        latest = delta.get('latest', (length, var, 0))
+        if latest[0] == length and latest[1] == var:
+            delta['latest'] = (length, var, latest[2] + 1)
+
+        if latest[2] >= 5:
+            self.time_cache[message.guild.id][message.author.id] = None
+        else:
+            self.time_cache[message.guild.id][message.author.id] = delta
+
+    async def on_guild_join(self, guild: Guild):
+        role_name = f'autoroles-{guild.id}'
         thz_name = f'thz-{guild.id}'
 
-        self.tables[guild.id]['auto'] = Table(auto_name)
+        self.tables[guild.id] = {}
+        self.tables[guild.id]['auto'] = Table(role_name)
         self.tables[guild.id]['thz'] = Table(thz_name)
 
-        self.cache[guild.id]['auto'] = {}
-        self.cache[guild.id]['auto']['reverse'] = {}
-        self.cache[guild.id]['auto']['values'] = []
-        self.cache[guild.id]['thz'] = {}
+        self.role_cache[guild.id] = AutoRoleCache()
+        self.thz_cache[guild.id] = {}
+        self.user_cache[guild.id] = {}
+
+        self.time_cache[guild.id] = {}
+
+        async with self.pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    ROLE_SCHEMA.format(name=role_name)
+                )
+
+                await cur.execute(
+                    THZ_SCHEMA.format(name=thz_name)
+                )
+
+    async def on_guild_remove(self, guild: Guild):
+        role_name = f'autoroles-{guild.id}'
+        thz_name = f'thz-{guild.id}'
+
+        del self.tables[guild.id]
+
+        del self.role_cache[guild.id]
+        del self.thz_cache[guild.id]
+        del self.user_cache[guild.id]
+
+        del self.time_cache[guild.id]
+
+        async with self.pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    f'DROP TABLE "{role_name}"'
+                )
+
+                await cur.execute(
+                    f'DROP TABLE "{thz_name}"'
+                )
 
     async def on_guild_role_delete(self, role: Role):
-        if role.id in self.cache[role.guild.id]['auto']:
+        if role.id in self.role_cache[role.guild.id]:
             await self._remove_roles(role.guild.id, role.id)
 
     async def on_member_remove(self, member: Member):
-        if member.id in self.cache[member.guild.id]['thz']:
-            await self._remove_users(member.guild.id, member.id)
+        await self._remove_users(member.guild.id, member.id)
 
-    def _get_nearest_role(self, guild_id, thz: int):
-        values = self.cache[guild_id]['auto']['values']
-        index = bisect_left(values, thz)
-        if values[index] > thz:
-            raise IndexError("no applicable roles")
-        return self.cache[guild_id]['auto']['reverse'][values[index]]
+    async def on_member_join(self, member: Member):
+        if member.bot:
+            return
 
-    async def _isolate_highest_role(self, member):
-        autoroles = []
-        for role in member.roles:
-            if role.id in self.cache[member.guild.id]['auto']:
-                autoroles.append(role)
-        autoroles.sort(
-            key=lambda role: self.cache[member.guild.id]['auto'][role.id],
-            reverse=True,
-        )
-        if autoroles:
-            await member.remove_roles(*autoroles[1:])
-            return autoroles[0]
-        return None
+        self.thz_cache[member.guild.id][member.id] = 0
+        async with self.pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await self._update_user_thz(cur, member.guild.id, member.id)
+                await self._update_user_role(cur, member.guild, member)
 
     @command(aliases=('lb',))
     @cooldown(1, 10.0, BucketType.channel)
     async def leaderboard(self, ctx: Context):
         """Display THz counts for this server."""
 
-        ranks = sorted(
-            (
-                (thz, user_id)
-                for user_id, thz
-                in self.cache[ctx.guild.id]['thz'].items()
-            ),
-            reverse=True,
-        )
+        ranks = self._get_user_ranks(ctx.guild.id)
 
         pages = EmbedPaginator(ctx, f"THz counts for {ctx.guild.name}...")
         for index, (thz, user_id) in enumerate(ranks, start=1):
@@ -301,12 +443,12 @@ class AutoRoles:
             if member:
                 pages.add_line(f"{index}. {member.mention} - {thz} THz")
             else:
-                pages.add_line(f"{index}. User {user_id} - {thz} THz")
+                pages.add_line(f"{index}. user {user_id} - {thz} THz")
 
         await pages.send_to()
 
     @command(aliases=('level', 'xp'))
-    @cooldown(1, 5.0, BucketType.user) 
+    @cooldown(1, 5.0, BucketType.user)
     async def thz(self, ctx: Context, member: Member = None):
         """Display your THz for this server."""
 
@@ -314,38 +456,27 @@ class AutoRoles:
             member = ctx.author
 
         try:
-            thz = self.cache[ctx.guild.id]['thz'][member.id]
+            thz = self.thz_cache[ctx.guild.id][member.id]
         except KeyError:
             await ctx.send("Untracked user!")
             return
 
-        try:
-            role = ctx.guild.get_role(
-                self._get_nearest_role(ctx.guild.id, thz)
-            )
-        except IndexError:
-            role = None
+        role_id = self.user_cache[ctx.guild.id].get(member.id)
+        role = ctx.guild.get_role(role_id) if role_id else None
 
-        ranks = sorted(
-            (
-                (thz, user_id)
-                for user_id, thz
-                in self.cache[ctx.guild.id]['thz'].items()
-            ),
-            reverse=True,
-        )
+        ranks = self._get_user_ranks(ctx.guild.id)
 
         for index, (thz, user_id) in enumerate(ranks, start=1):
             if user_id == member.id:
                 rank = index
                 break
 
-        embed=Embed(
+        embed = Embed(
             title=f"{member.name}'s THz for {ctx.guild.name}",
             description=(
                 f"**Total**: {thz} THz\n"
                 f"**Role**: {role.mention if role else 'N/A'}\n"
-                f"**Rank**: #{rank}/{len(self.cache[ctx.guild.id]['thz'])}\n"
+                f"**Rank**: #{rank}/{len(self.thz_cache[ctx.guild.id])}\n"
             ),
         ).set_thumbnail(
             url=member.avatar_url
@@ -360,18 +491,49 @@ class AutoRoles:
 
         await ctx.send(await self.bot.get_help_message(ctx))
 
+    @autorole.command(name='list')
+    async def autorole_list(self, ctx: Context):
+        """List all available autoroles."""
+
+        roles = self.role_cache[ctx.guild.id]
+        if not roles:
+            await ctx.send("No autoroles registered.")
+            return
+
+        roles = (
+            (
+                ctx.guild.get_role(
+                    self.role_cache[ctx.guild.id].get_role_id(thz)
+                ),
+                thz,
+            )
+            for thz
+            in self.role_cache[ctx.guild.id].values
+        )
+
+        pages = EmbedPaginator(ctx, f"{ctx.guild.name} autoroles...")
+        for index, (role, thz) in enumerate(roles, start=1):
+            pages.add_line(f'{index}. {role.mention} - {thz} THz')
+
+        await pages.send_to()
+
     @autorole.command(name='add')
     async def autorole_add(self, ctx: Context, thz: int, *, role):
         """Add a role to the autorole registration."""
 
+        if thz < 0:
+            await ctx.send("You can't have negative THz!")
+            return
+
         role = self.bot.convert_roles(ctx, role)[0]
-        if thz in self.cache[ctx.guild.id]['auto']['reverse']:
-            await ctx.send('There is already a role registered for this THz '
-                           'value.')
+        if self.role_cache[ctx.guild.id].has_thz(thz):
+            await ctx.send("There is already a role registered for this Thz "
+                           "value.")
+            return
 
         async with self.pool.acquire() as conn:
             async with conn.cursor() as cur:
-                table = self.tables[ctx.guild.id]['auto']
+                table = self.tables[ctx.guild.id]['role']
                 try:
                     await cur.execute(str(
                         self.Query.into(table).insert(role.id, thz)
@@ -385,52 +547,37 @@ class AutoRoles:
                         )
                     ))
 
-        self.cache[ctx.guild.id]['auto'][role.id] = thz
-        self.cache[ctx.guild.id]['auto']['reverse'][thz] = role.id
-        self.cache[ctx.guild.id]['auto']['values'].append(thz)
-        self.cache[ctx.guild.id]['auto']['values'].sort()
-        await ctx.send(f'Registered role "{role}" for {thz:,} THz.')
+        self.role_cache[ctx.guild.id].add_role(role.id, thz)
+        await ctx.send(f'Registered role "{role}" for {thz:,} Thz.')
 
         async with self.pool.acquire() as conn:
-            guild_id = ctx.guild.id
-            table = self.tables[guild_id]['thz']
-            for member in ctx.guild.members:
-                highest = await self._isolate_highest_role(member)
-                try:
-                    member_thz = self.cache[guild_id]['thz'][member.id]
-                except KeyError:
-                    continue
-                if self._get_nearest_role(
-                        guild_id,
-                        self.cache[guild_id]['thz'][member.id]
-                ) >= thz:
-                    await member.remove_roles(highest)
-                    await member.add_roles(role)
-                    continue
+            async with conn.cursor() as cur:
+                for member in ctx.guild.members:
+                    if member.bot:
+                        continue
 
-                if (highest == role) and (
-                    self.cache[guild_id]['thz'][member.id] < thz
-                ):
-                    self.cache[guild_id]['thz'][member.id] = thz
-                    async with conn.cursor() as cur:
-                        try:
-                            await cur.execute(str(
-                                self.Query.into(
-                                    table
-                                ).insert(
-                                    user_id,
-                                    self.cache[guild_id]['thz'][member.id],
-                                )
-                            ))
-                        except IntegrityError:
-                            await cur.execute(str(
-                                self.Query.update(table).set(
-                                    table.thz,
-                                    self.cache[guild_id]['thz'][member.id],
-                                ).where(
-                                    table.user_id == member.id
-                                )
-                            ))
+                    if (
+                            self.role_cache[ctx.guild.id].find_highest_role_id(
+                                frozenset((r.id for r in member.roles))
+                            )
+                            == role.id
+                    ):
+                        if (
+                                self.thz_cache[ctx.guild.id].get(member.id, 0)
+                                < thz
+                        ):
+                            self.thz_cache[ctx.guild.id][member.id] = thz
+                            await self._update_user_thz(
+                                cur,
+                                ctx.guild.id,
+                                member.id,
+                            )
+
+                    await self._update_user_role(
+                        cur,
+                        ctx.guild,
+                        member,
+                    )
 
     @autorole.command(name='remove')
     async def autorole_remove(self, ctx: Context, *, role):
@@ -442,38 +589,46 @@ class AutoRoles:
 
         await ctx.send(f'Unregistered role "{role}".')
 
-    @autorole.command(name='list')
-    async def autorole_list(self, ctx: Context):
-        """List all available autoroles."""
+        async with self.pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                for member in ctx.guild.members:
+                    if member.bot:
+                        continue
 
-        roles = self.cache[ctx.guild.id]['auto']
-        if not roles:
-            await ctx.send("No autoroles registered.")
+                    await self._update_user_role(
+                        cur,
+                        ctx.guild,
+                        member,
+                    )
+
+    @command(aliases=('setxp',))
+    @has_permissions(manage_roles=True)
+    async def setthz(self, ctx: Context, member: Member, thz: int):
+        """Set the THz of a user for your guild."""
+
+        if thz < 0:
+            await ctx.send("You can't have a negative THz!")
             return
 
-        roles = sorted(
-            (
-                (ctx.guild.get_role(role_id), thz)
-                for role_id, thz
-                in roles.items()
-                if isinstance(role_id, int)
-            ),
-            key=itemgetter(1),
-        )
+        self.thz_cache[ctx.guild.id][member.id] = thz
+        async with self.pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await self._update_user_thz(cur, ctx.guild.id, member.id)
+                await self._update_user_role(cur, ctx.guild, member)
 
-        pages = EmbedPaginator(ctx, f"{ctx.guild.name} autoroles...")
-        for index, (role, thz) in enumerate(roles, start=1):
-            pages.add_line(f'{index}. {role.mention} - {thz} THz')
-
-        await pages.send_to()
+        await ctx.send(f"{member.name}'s THz set to {thz} THz.")
 
 
 async def _setup(bot: Bot):
     await bot.wait_until_ready()
-    cog = AutoRoles(bot)
-    await cog._init()
-    log.info("adding AutoRoles cog")
-    bot.add_cog(cog)
+    try:
+        cog = AutoRoles(bot)
+        await cog._init()
+        log.info("adding AutoRoles cog")
+        bot.add_cog(cog)
+    except:  # noqa: E722
+        backup_flag.clear()
+        raise
 
 
 def setup(bot: Bot):
@@ -482,5 +637,6 @@ def setup(bot: Bot):
 
 
 def teardown(bot: Bot):
+    backup_flag.clear()
     log.info("removing AutoRoles cog")
     bot.remove_cog(AutoRoles.__name__)
