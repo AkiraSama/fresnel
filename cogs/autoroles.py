@@ -453,9 +453,9 @@ class AutoRoles:
         for index, (thz, user_id) in enumerate(ranks, start=1):
             member = ctx.guild.get_member(user_id)
             if member:
-                pages.add_line(f"{index}. {member.mention} - {thz} THz")
+                pages.add_line(f"{index}. {member.mention} - {thz:,} THz")
             else:
-                pages.add_line(f"{index}. user {user_id} - {thz} THz")
+                pages.add_line(f"{index}. user {user_id} - {thz:,} THz")
 
         await pages.send_to()
 
@@ -486,7 +486,7 @@ class AutoRoles:
         embed = Embed(
             title=f"{member.name}'s THz for {ctx.guild.name}",
             description=(
-                f"**Total**: {thz} THz\n"
+                f"**Total**: {thz:,} THz\n"
                 f"**Role**: {role.mention if role else 'N/A'}\n"
                 f"**Rank**: #{rank}/{len(self.thz_cache[ctx.guild.id])}\n"
             ),
@@ -525,7 +525,7 @@ class AutoRoles:
 
         pages = EmbedPaginator(ctx, f"{ctx.guild.name} autoroles...")
         for index, (role, thz) in enumerate(roles, start=1):
-            pages.add_line(f'{index}. {role.mention} - {thz} THz')
+            pages.add_line(f'{index}. {role.mention} - {thz:,} THz')
 
         await pages.send_to()
 
@@ -628,7 +628,7 @@ class AutoRoles:
                 await self._update_user_thz(cur, ctx.guild.id, member.id)
                 await self._update_user_role(cur, ctx.guild, member)
 
-        await ctx.send(f"{member.name}'s THz set to {thz} THz.")
+        await ctx.send(f"{member.name}'s THz set to {thz:,} THz.")
 
 
 async def _setup(bot: Bot):
