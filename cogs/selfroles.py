@@ -173,7 +173,7 @@ class SelfRoles:
 
         await pages.send_to()
 
-    @command(aliases=('+',))
+    @command(aliases=('+', 'iam'))
     async def addrole(self, ctx: Context, *, roles):
         """Add a role to yourself."""
 
@@ -198,12 +198,12 @@ class SelfRoles:
             await ctx.author.add_roles(*available,
                                        reason="Fresnel selfroling")
             await ctx.send(embed=Embed(
-                title="Roles applied...",
+                title=f"Roles applied to {ctx.author.name}...",
                 description=', '.join(role.mention for role in available),
                 color=Color.green(),
             ))
 
-    @command(aliases=('delrole', '-'))
+    @command(aliases=('delrole', '-', 'iamnot', 'iamn'))
     async def removerole(self, ctx: Context, *, roles):
         """Remove a role from yourself."""
 
@@ -228,7 +228,7 @@ class SelfRoles:
             await ctx.author.remove_roles(*available,
                                           reason="Fresnel selfroling")
             await ctx.send(embed=Embed(
-                title="Roles removed...",
+                title=f"Roles removed from {ctx.author.name}...",
                 description=', '.join(role.mention for role in available),
                 color=Color.green(),
             ))
