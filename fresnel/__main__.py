@@ -94,7 +94,7 @@ def main(cfg):
     bot._config = cfg
 
     loop = asyncio.get_event_loop()
-    
+
     try:
         bot.load_extension('fresnel.core.error')
         bot.load_extension('fresnel.core.db')
