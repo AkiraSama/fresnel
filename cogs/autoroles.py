@@ -270,7 +270,6 @@ class AutoRoles:
             ))
 
     async def _update_user_role(self, cursor, guild, member):
-        print("calculating nearest role")
         role_id = self.role_cache[guild.id].get_nearest_role_id(
             self.thz_cache[guild.id].get(member.id, 0)
         )
@@ -278,13 +277,11 @@ class AutoRoles:
         if self.user_cache[guild.id].get(member.id) == role_id:
             return
 
-        print("finding all role ids")
         role_ids = self.role_cache[guild.id].find_role_ids(
             frozenset((role.id for role in member.roles))
         )
 
         if role_id not in role_ids:
-            print("adding missing role")
             await member.add_roles(
                 guild.get_role(role_id),
                 reason="Fresnel autoroles",
@@ -293,7 +290,6 @@ class AutoRoles:
         role_ids.discard(role_id)
 
         if role_ids:
-            print("removing excess roles")
             await member.remove_roles(
                 *(guild.get_role(rid) for rid in role_ids),
                 reason="Fresnel autoroles",
