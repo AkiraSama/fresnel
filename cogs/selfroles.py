@@ -77,12 +77,13 @@ class SelfRoles:
                     SCHEMA.format(name=name)
                 )
 
-    @group(invoke_without_command=True)
+    @group()
     @has_permissions(manage_roles=True)
     async def roleman(self, ctx: Context):
         """Manage selfroles."""
 
-        await ctx.send(await self.bot.get_help_message(ctx))
+        if not ctx.invoked_subcommand:
+            await ctx.send(await self.bot.get_help_message(ctx))
 
     @roleman.command(name='add')
     async def roleman_add(self, ctx: Context, *, roles):
