@@ -497,11 +497,10 @@ class AutoRoles:
         await ctx.send(embed=embed)
 
     @group(invoke_without_command=True, aliases=('autoroles',))
-    @has_permissions(manage_roles=True)
     async def autorole(self, ctx: Context):
         """Manage autoroles."""
 
-        await ctx.send(await self.bot.get_help_message(ctx))
+        #await ctx.send(await self.bot.get_help_message(ctx))
 
     @autorole.command(name='list')
     async def autorole_list(self, ctx: Context):
@@ -530,6 +529,7 @@ class AutoRoles:
         await pages.send_to()
 
     @autorole.command(name='add')
+    @has_permissions(manage_roles=True)
     async def autorole_add(self, ctx: Context, thz: int, *, role):
         """Add a role to the autorole registration."""
 
@@ -592,6 +592,7 @@ class AutoRoles:
                     )
 
     @autorole.command(name='remove')
+    @has_permissions(manage_roles=True)
     async def autorole_remove(self, ctx: Context, *, role):
         """Remove a role from the autorole registration."""
 
