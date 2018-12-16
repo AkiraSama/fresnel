@@ -1,6 +1,7 @@
 #!/usr/bin/env python3.6
 
 import argparse
+import asyncio
 import logging
 import sys
 from pathlib import Path
@@ -92,16 +93,20 @@ def main(cfg):
     )
     bot._config = cfg
 
+    loop = asyncio.get_event_loop()
+    
     try:
         bot.load_extension('fresnel.core.error')
         bot.load_extension('fresnel.core.db')
         bot.load_extension('fresnel.core.cache')
         bot.load_extension('fresnel.core.extman')
 
-        bot.run(token)
+        loop.run_until_complete(bot.start(token))
     except:  # noqa: E722
-        bot.loop.run_until_complete(bot.logout())
+        loop.run_until_complete(bot.logout())
         raise
+    finally:
+        loop.close()
 
 
 if __name__ == '__main__':
