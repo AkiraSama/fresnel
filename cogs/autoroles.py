@@ -217,7 +217,7 @@ class AutoRoles:
                 log.debug("allocating THz")
                 await self._periodic()
             except asyncio.CancelledError:
-                raise
+                return
             except Exception as e:
                 log.error(f"periodic error: {e}")
 

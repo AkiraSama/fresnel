@@ -1,6 +1,7 @@
 import logging
 
 import aiopg
+import aioredis
 from discord.ext.commands import Bot
 from pypika import PostgreSQLQuery
 
@@ -11,6 +12,13 @@ log = logging.getLogger(__name__)
 
 
 class DBManager:
+    REDIS_DEFAULT_DICT = {
+        'host': 'localhost',
+        'port': 6379,
+        'db': 0,
+        'password': None,
+    }
+
     def __init__(self, bot: Bot):
         self.bot = bot
 
@@ -19,6 +27,12 @@ class DBManager:
             'psql_info',
             default=constants.PSQL_DEFAULT_DICT,
             comment="PostgreSQL database and user information",
+        )
+
+        self.redis_info = self.bot._config.get(
+            'redis_info',
+            default=self.REDIS_DEFAULT_DICT,
+            comment="Redis remote dictionary server connection information",
         )
 
         self.db_info = {
@@ -30,10 +44,21 @@ class DBManager:
         if needed:
             log.error("please fully configure your PostgreSQL information in "
                       "your configuration file. "
-                      f"missing keys: {','.join(needed)}")
+                      f"missing keys: {', '.join(needed)}")
             raise ValueError(
                 "Postgres config. "
-                f"missing keys: {','.join(needed)}"
+                f"missing keys: {', '.join(needed)}"
+            )
+
+        needed = {'host', 'port', 'db'} - self.redis_info.keys()
+
+        if needed:
+            log.error("please fully configure your Redis information in "
+                      "your configuration file. "
+                      f"missing keys: {', '.join(needed)}")
+            raise ValueError(
+                "Redis config. "
+                f"missing keys: {', '.join(needed)}"
             )
 
         dsn = constants.PSQL_INFO_STR.format(**self.db_info)
@@ -42,6 +67,16 @@ class DBManager:
         log.info("db connection established")
 
         self.bot._db_Query = PostgreSQLQuery
+
+        self.bot.redis_pool = await aioredis.create_pool(
+            (self.redis_info['host'], self.redis_info['port']),
+            db=self.redis_info['db'],
+            password=self.redis_info.get('password'),
+        )
+        log.info("Redis connection established")
+
+    def __unload(self):
+        self.bot.redis_pool.close()
 
 
 async def _setup(bot: Bot):

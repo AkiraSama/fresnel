@@ -102,9 +102,22 @@ def main(cfg):
         bot.load_extension('fresnel.core.extman')
 
         loop.run_until_complete(bot.start(token))
-    except:  # noqa: E722
+    except (KeyboardInterrupt, Exception) as e:  # noqa: E722
+        for extension in tuple(bot.extensions):
+            if extension.startswith('fresnel.core.'):
+                continue
+            bot.unload_extension(extension)
+
+        bot.unload_extension('fresnel.core.extman')
+        bot.unload_extension('fresnel.core.cache')
+        bot.unload_extension('fresnel.core.db')
+        bot.unload_extension('fresnel.core.error')
+
         loop.run_until_complete(bot.logout())
-        raise
+        if not isinstance(e, KeyboardInterrupt):
+            raise
+        else:
+            log.info("Goodbye!")
     finally:
         loop.close()
 
