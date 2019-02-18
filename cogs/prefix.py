@@ -99,7 +99,7 @@ class PrefixManager:
 
         await self.redis.hset(
             KEY_NAME,
-            str(ctx.guild.id),
+            ctx.guild.id,
             row.getvalue(),
         )
 
@@ -129,7 +129,7 @@ class PrefixManager:
 
             await self.redis.hset(
                 KEY_NAME,
-                str(ctx.guild.id),
+                ctx.guild.id,
                 row.getvalue(),
             )
 
@@ -137,7 +137,7 @@ class PrefixManager:
         else:
             await self.redis.hdel(
                 KEY_NAME,
-                str(ctx.guild.id),
+                ctx.guild.id,
             )
 
             del self.cache[ctx.guild.id]
