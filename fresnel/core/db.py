@@ -68,10 +68,11 @@ class DBManager:
 
         self.bot._db_Query = PostgreSQLQuery
 
-        self.bot.redis_pool = await aioredis.create_pool(
+        self.bot.redis_pool = await aioredis.create_redis_pool(
             (self.redis_info['host'], self.redis_info['port']),
             db=self.redis_info['db'],
             password=self.redis_info.get('password'),
+            encoding='utf-8',
         )
         log.info("Redis connection established")
 

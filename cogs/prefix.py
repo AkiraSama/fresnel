@@ -1,8 +1,6 @@
 import csv
 import logging
-from functools import reduce
 from io import StringIO
-from operator import or_
 
 from discord import Message
 from discord.ext.commands import (
@@ -12,28 +10,18 @@ from discord.ext.commands import (
     has_permissions,
     when_mentioned_or,
 )
-from psycopg2 import IntegrityError
-from pypika import Table
 
 
 log = logging.getLogger(__name__)
 
 
-SCHEMA = '''
-CREATE TABLE IF NOT EXISTS "prefix" (
-    guild_id BIGINT NOT NULL,
-    prefixes VARCHAR(255),
-    PRIMARY KEY (guild_id)
-)
-'''
+KEY_NAME = 'prefixes'
 
 
 class PrefixManager:
     def __init__(self, bot: Bot):
         self.bot = bot
-        self.pool = bot._db_pool
-        self.Query = bot._db_Query
-        self.table = Table('prefix')
+        self.redis = bot.redis_pool
         self.cache = {}
         self.default_prefix = bot.command_prefix
 
@@ -41,41 +29,30 @@ class PrefixManager:
         self.bot.command_prefix = self.default_prefix
 
     async def _init(self):
-        guild_ids = set(guild.id for guild in self.bot.guilds)
-        async with self.pool.acquire() as conn:
-            async with conn.cursor() as cur:
-                await cur.execute(SCHEMA)
+        guild_ids = set(
+            str(guild.id)
+            for guild
+            in self.bot.guilds
+        )
 
-                await cur.execute(str(
-                    self.Query.from_(self.table).select(
-                        self.table.guild_id,
-                        self.table.prefixes,
-                    )
-                ))
+        with await self.redis as conn:
+            cache = await conn.hgetall(KEY_NAME)
 
-                cleanup = []
-                async for guild_id, prefixes in cur:
-                    if guild_id in guild_ids:
-                        try:
-                            self.cache[guild_id] = next(
-                                csv.reader(StringIO(prefixes))
-                            )
-                        except StopIteration:
-                            pass
-                    else:
-                        cleanup.append(guild_id)
+            cleanup = cache.keys() - guild_ids
+            cleanup_tr = conn.multi_exec()
 
-                if cleanup:
-                    where = reduce(
-                        or_,
-                        (self.table.guild_id == guild_id
-                         for guild_id
-                         in cleanup),
-                    )
+            for guild_id, prefixes in cache.items():
+                if guild_id in cleanup:
+                    cleanup_tr.hdel(KEY_NAME, guild_id)
+                else:
+                    try:
+                        self.cache[int(guild_id)] = next(
+                            csv.reader(StringIO(prefixes))
+                        )
+                    except StopIteration:
+                        cleanup_tr.hdel(KEY_NAME, guild_id)
 
-                    await cur.execute(str(
-                        self.Query.form_(self.table).where(where).delete()
-                    ))
+            await cleanup_tr.execute()
 
         def get_prefix(bot: Bot, message: Message):
             prefixes = self.cache.get(message.guild.id)
@@ -120,22 +97,11 @@ class PrefixManager:
         row = StringIO()
         csv.writer(row).writerow(new_prefixes)
 
-        async with self.pool.acquire() as conn:
-            async with conn.cursor() as cur:
-                try:
-                    await cur.execute(str(
-                        self.Query.into(self.table).insert(
-                            ctx.guild.id, row.getvalue(),
-                        )
-                    ))
-                except IntegrityError:
-                    await cur.execute(str(
-                        self.Query.update(self.table).set(
-                            self.table.prefixes, row.getvalue(),
-                        ).where(
-                            self.table.guild_id == ctx.guild.id
-                        )
-                    ))
+        await self.redis.hset(
+            KEY_NAME,
+            str(ctx.guild.id),
+            row.getvalue(),
+        )
 
         self.cache[ctx.guild.id] = new_prefixes
         await ctx.send("Added new prefix.")
@@ -143,7 +109,7 @@ class PrefixManager:
     @prefix.command(name='remove')
     @has_permissions(manage_channels=True)
     async def prefix_remove(self, ctx: Context, prefix: str):
-        """Remove and existing custom command prefix."""
+        """Remove an existing custom command prefix."""
 
         new_prefixes = self.cache.get(ctx.guild.id, [])
 
@@ -157,20 +123,25 @@ class PrefixManager:
             await ctx.send("No such prefix exists.")
             return
 
-        row = StringIO()
-        csv.writer(row).writerow(new_prefixes)
+        if new_prefixes:
+            row = StringIO()
+            csv.writer(row).writerow(new_prefixes)
 
-        async with self.pool.acquire() as conn:
-            async with conn.cursor() as cur:
-                await cur.execute(str(
-                    self.Query.update(self.table).set(
-                        self.table.prefixes, row.getvalue(),
-                    ).where(
-                        self.table.guild_id == ctx.guild.id
-                    )
-                ))
+            await self.redis.hset(
+                KEY_NAME,
+                str(ctx.guild.id),
+                row.getvalue(),
+            )
 
-        self.cache[ctx.guild.id] = new_prefixes
+            self.cache[ctx.guild.id] = new_prefixes
+        else:
+            await self.redis.hdel(
+                KEY_NAME,
+                str(ctx.guild.id),
+            )
+
+            del self.cache[ctx.guild.id]
+
         await ctx.send("Prefix removed.")
 
 
