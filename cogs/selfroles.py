@@ -1,4 +1,6 @@
 import logging
+from functools import reduce
+from operator import attrgetter, or_
 
 from discord import Color, Embed, Role
 from discord.ext.commands import (
@@ -8,17 +10,28 @@ from discord.ext.commands import (
     group,
     has_permissions,
 )
+from psycopg2 import IntegrityError
+from pypika import Table
 
 from fresnel.core.util import EmbedPaginator
 
 
 log = logging.getLogger(__name__)
 
+SCHEMA = '''
+CREATE TABLE IF NOT EXISTS "{name}" (
+    role_id BIGINT NOT NULL,
+    PRIMARY KEY (role_id)
+)
+'''
+
 
 class SelfRoles:
     def __init__(self, bot: Bot):
         self.bot = bot
-        self.redis = bot.redis_pool
+        self.pool = bot._db_pool
+        self.Query = bot._db_Query
+        self.tables = {}
         self.cache = {}
 
     async def _init(self):
