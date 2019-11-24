@@ -5,6 +5,7 @@ from io import StringIO
 from discord import Message
 from discord.ext.commands import (
     Bot,
+    Cog,
     Context,
     group,
     has_permissions,
@@ -18,7 +19,7 @@ log = logging.getLogger(__name__)
 KEY_NAME = 'prefixes'
 
 
-class PrefixManager:
+class PrefixManager(Cog):
     def __init__(self, bot: Bot):
         self.bot = bot
         self.redis = bot.redis_pool

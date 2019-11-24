@@ -5,6 +5,7 @@ from operator import attrgetter, or_
 from discord import Color, Embed, Role
 from discord.ext.commands import (
     Bot,
+    Cog,
     Context,
     command,
     group,
@@ -26,7 +27,7 @@ CREATE TABLE IF NOT EXISTS "{name}" (
 '''
 
 
-class SelfRoles:
+class SelfRoles(Cog):
     def __init__(self, bot: Bot):
         self.bot = bot
         self.pool = bot._db_pool

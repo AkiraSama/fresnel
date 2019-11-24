@@ -1,13 +1,13 @@
 import logging
 from pathlib import Path
 
-from discord.ext.commands import Bot, Context, group, is_owner
+from discord.ext.commands import Bot, Cog, Context, group, is_owner
 
 
 log = logging.getLogger(__name__)
 
 
-class ExtensionManager:
+class ExtensionManager(Cog):
     def __init__(self, bot: Bot):
         self.bot = bot
         self.ext_dir = Path(bot._config.get(

@@ -4,7 +4,13 @@ import re
 import shlex
 
 from discord import Guild, Role
-from discord.ext.commands import BadArgument, Bot, Context, NoPrivateMessage
+from discord.ext.commands import (
+    BadArgument,
+    Bot,
+    Cog,
+    Context,
+    NoPrivateMessage,
+)
 
 
 log = logging.getLogger(__name__)
@@ -13,9 +19,11 @@ ID_MATCH = re.compile(r'([0-9]{15,21})$')
 ROLE_ID_MATCH = re.compile(r'<@&([0-9]+)>$')
 
 
-class CacheManager:
+class CacheManager(Cog):
     def __init__(self, bot: Bot):
         self.bot = bot
+        self.redis = bot.redis_pool
+
         self.bot.fresnel_cache_flag = asyncio.Event()
         self.role_name_cache = {}
 

@@ -2,7 +2,7 @@ import logging
 
 import aiopg
 import aioredis
-from discord.ext.commands import Bot
+from discord.ext.commands import Bot, Cog
 from pypika import PostgreSQLQuery
 
 from fresnel import constants
@@ -11,7 +11,7 @@ from fresnel import constants
 log = logging.getLogger(__name__)
 
 
-class DBManager:
+class DBManager(Cog):
     REDIS_DEFAULT_DICT = {
         'host': 'localhost',
         'port': 6379,

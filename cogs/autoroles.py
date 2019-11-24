@@ -9,6 +9,7 @@ from discord import Embed, Guild, Member, Message, Role
 from discord.ext.commands import (
     Bot,
     BucketType,
+    Cog,
     Context,
     command,
     cooldown,
@@ -110,7 +111,7 @@ class AutoRoleCache:
             raise ValueError("no such role id")
 
 
-class AutoRoles:
+class AutoRoles(Cog):
     THZ_INTERVAL = 120
 
     def __init__(self, bot: Bot):
