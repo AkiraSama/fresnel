@@ -159,9 +159,11 @@ class SelfRoles(Cog):
 
         roles = sorted(
             (
-                ctx.guild.get_role(role_id)
-                for role_id
-                in roles
+                role for role in (
+                    ctx.guild.get_role(role_id)
+                    for role_id
+                    in roles
+                ) if role
             ),
             key=attrgetter('position'),
             reverse=True,
